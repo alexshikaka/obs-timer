@@ -143,22 +143,33 @@ void TimerDock::buildUi()
 
 	/* --- 4. quick minute buttons ---------------------------------------- */
 	auto *presetsRow = new QHBoxLayout();
-	presetsRow->setSpacing(4);
+	presetsRow->setSpacing(3);
+
+	/* OBS theme gives QPushButton a large padding; zero it out so the digits
+	 * fit into these small square buttons. */
+	const QString presetStyle = QStringLiteral("QPushButton { padding: 0px; margin: 0px; }");
+
+	QFont presetFont = font();
+	presetFont.setPointSize(9);
 
 	for (int minutes = 1; minutes <= 9; minutes++) {
 		auto *button = new QPushButton(QString::number(minutes), this);
-		button->setMinimumWidth(34);
-		button->setMinimumHeight(26);
+		button->setFont(presetFont);
+		button->setFixedSize(24, 22);
+		button->setStyleSheet(presetStyle);
 		connect(button, &QPushButton::clicked, this, [this, minutes]() { m_minutesBox->setValue(minutes); });
 		presetsRow->addWidget(button);
 	}
 
 	auto *tenButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes")), this);
+	tenButton->setFont(presetFont);
+	tenButton->setFixedSize(40, 22);
+	tenButton->setStyleSheet(presetStyle);
 	tenButton->setToolTip(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes.Hint")));
-	tenButton->setMinimumHeight(26);
 	connect(tenButton, &QPushButton::clicked, this, [this]() { m_minutesBox->setValue(10); });
-	presetsRow->addWidget(tenButton, 1);
+	presetsRow->addWidget(tenButton);
 
+	presetsRow->addStretch(1);
 	root->addLayout(presetsRow);
 
 	/* --- 5. display format ---------------------------------------------- */
