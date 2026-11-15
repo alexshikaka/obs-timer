@@ -1,5 +1,5 @@
 /*
-obs-timer - a simple dockable timer for OBS Studio
+obs-timer - countdown timer for OBS Studio
 Copyright (C) 2026 alexshikaka
 
 This program is free software; you can redistribute it and/or modify
@@ -20,18 +20,16 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs-module.h>
 
-#include <QCheckBox>
 #include <QComboBox>
-#include <QDateTime>
 #include <QDir>
 #include <QFile>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -41,27 +39,29 @@ namespace obstimer {
 TimerDock *TimerDock::s_instance = nullptr;
 
 namespace {
+/* How often the countdown is polled.  The file itself is written once per
+ * whole second, the finer poll is only there to keep the switch accurate. */
 constexpr int kTickIntervalMs = 100;
-constexpr int kConfigSaveDelayMs = 400;
+constexpr int kMaxHours = 99;
+constexpr int kMaxMinutes = 59;
+constexpr int kMaxSeconds = 59;
 } // namespace
 
 TimerDock::TimerDock(QWidget *parent) : QWidget(parent)
 {
 	m_config = loadConfig();
-	m_clock.start();
 
 	buildUi();
 	applyConfig();
 
+	m_remainingMs = configuredMs();
+
 	m_tickTimer = new QTimer(this);
 	m_tickTimer->setInterval(kTickIntervalMs);
 	connect(m_tickTimer, &QTimer::timeout, this, &TimerDock::onTick);
-	m_tickTimer->start();
 
-	m_configSaveTimer = new QTimer(this);
-	m_configSaveTimer->setSingleShot(true);
-	m_configSaveTimer->setInterval(kConfigSaveDelayMs);
-	connect(m_configSaveTimer, &QTimer::timeout, this, [this]() { persistSettings(); });
+	updateDisplay();
+	updateStartPauseButton();
 
 	s_instance = this;
 }
@@ -80,6 +80,72 @@ void TimerDock::buildUi()
 	root->setContentsMargins(8, 8, 8, 8);
 	root->setSpacing(6);
 
+	/* --- hours / minutes / seconds ------------------------------------- */
+	auto *fieldsRow = new QHBoxLayout();
+	fieldsRow->setSpacing(6);
+
+	m_hoursBox = new QSpinBox(this);
+	m_hoursBox->setRange(0, kMaxHours);
+	m_hoursBox->setAlignment(Qt::AlignCenter);
+	m_minutesBox = new QSpinBox(this);
+	m_minutesBox->setRange(0, kMaxMinutes);
+	m_minutesBox->setAlignment(Qt::AlignCenter);
+	m_secondsBox = new QSpinBox(this);
+	m_secondsBox->setRange(0, kMaxSeconds);
+	m_secondsBox->setAlignment(Qt::AlignCenter);
+
+	const struct {
+		QSpinBox *box;
+		const char *label;
+	} fields[] = {
+		{m_hoursBox, "Timer.Label.Hours"},
+		{m_minutesBox, "Timer.Label.Minutes"},
+		{m_secondsBox, "Timer.Label.Seconds"},
+	};
+
+	for (const auto &field : fields) {
+		auto *column = new QVBoxLayout();
+		column->setSpacing(2);
+		column->addWidget(field.box);
+
+		auto *label = new QLabel(QString::fromUtf8(obs_module_text(field.label)), this);
+		label->setAlignment(Qt::AlignCenter);
+		column->addWidget(label);
+
+		connect(field.box, &QSpinBox::valueChanged, this, &TimerDock::onDurationChanged);
+		fieldsRow->addLayout(column);
+	}
+
+	root->addLayout(fieldsRow);
+
+	/* --- quick minute buttons ------------------------------------------ */
+	auto *presetsRow = new QHBoxLayout();
+	presetsRow->setSpacing(3);
+
+	for (int minutes = 1; minutes <= 9; minutes++) {
+		auto *button = new QPushButton(QString::number(minutes), this);
+		button->setFixedWidth(26);
+		connect(button, &QPushButton::clicked, this, [this, minutes]() { m_minutesBox->setValue(minutes); });
+		presetsRow->addWidget(button);
+	}
+
+	auto *tenButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes")), this);
+	tenButton->setToolTip(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes.Hint")));
+	connect(tenButton, &QPushButton::clicked, this, [this]() { m_minutesBox->setValue(10); });
+	presetsRow->addWidget(tenButton, 1);
+
+	root->addLayout(presetsRow);
+
+	/* --- display format ------------------------------------------------ */
+	m_formatCombo = new QComboBox(this);
+	m_formatCombo->addItem(QString::fromUtf8(obs_module_text("Timer.Format.HoursMinutesSeconds")));
+	m_formatCombo->addItem(QString::fromUtf8(obs_module_text("Timer.Format.MinutesSeconds")));
+	m_formatCombo->addItem(QString::fromUtf8(obs_module_text("Timer.Format.SecondsOnly")));
+	m_formatCombo->setToolTip(QString::fromUtf8(obs_module_text("Timer.Format.Hint")));
+	connect(m_formatCombo, &QComboBox::currentIndexChanged, this, &TimerDock::onFormatChanged);
+	root->addWidget(m_formatCombo);
+
+	/* --- the timer itself ----------------------------------------------- */
 	m_timeLabel = new QLabel(QStringLiteral("00:00:00"), this);
 	m_timeLabel->setAlignment(Qt::AlignCenter);
 	m_timeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -91,63 +157,33 @@ void TimerDock::buildUi()
 	m_timeLabel->setMinimumHeight(56);
 	root->addWidget(m_timeLabel);
 
-	auto *buttonRow = new QHBoxLayout();
-	buttonRow->setSpacing(6);
+	/* --- start / stop --------------------------------------------------- */
+	auto *buttonsRow = new QHBoxLayout();
+	buttonsRow->setSpacing(6);
 
 	m_startPauseButton = new QPushButton(this);
 	m_startPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
 	connect(m_startPauseButton, &QPushButton::clicked, this, &TimerDock::startOrPause);
-	buttonRow->addWidget(m_startPauseButton);
+	buttonsRow->addWidget(m_startPauseButton, 1);
 
-	m_resetButton = new QPushButton(this);
+	m_resetButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Button.Stop")), this);
 	m_resetButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-	connect(m_resetButton, &QPushButton::clicked, this, &TimerDock::resetTimer);
-	buttonRow->addWidget(m_resetButton);
+	connect(m_resetButton, &QPushButton::clicked, this, &TimerDock::reset);
+	buttonsRow->addWidget(m_resetButton, 1);
 
-	m_saveButton = new QPushButton(this);
-	m_saveButton->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
-	connect(m_saveButton, &QPushButton::clicked, this, &TimerDock::saveNow);
-	buttonRow->addWidget(m_saveButton);
+	root->addLayout(buttonsRow);
 
-	root->addLayout(buttonRow);
-
-	auto *pathRow = new QHBoxLayout();
-	pathRow->setSpacing(6);
+	/* --- output file ---------------------------------------------------- */
 	m_pathEdit = new QLineEdit(this);
-	m_pathEdit->setPlaceholderText(QStringLiteral("obs-timer.txt"));
-	connect(m_pathEdit, &QLineEdit::textEdited, this, &TimerDock::onConfigChanged);
-	pathRow->addWidget(m_pathEdit, 1);
+	m_pathEdit->setPlaceholderText(QString::fromUtf8(obs_module_text("Timer.Label.File")));
+	connect(m_pathEdit, &QLineEdit::editingFinished, this, &TimerDock::onFilePathEdited);
+	root->addWidget(m_pathEdit);
 
-	m_browseButton = new QPushButton(QStringLiteral("..."), this);
-	m_browseButton->setFixedWidth(32);
-	connect(m_browseButton, &QPushButton::clicked, this, &TimerDock::onBrowseClicked);
-	pathRow->addWidget(m_browseButton);
-	root->addLayout(pathRow);
-
-	auto *intervalRow = new QHBoxLayout();
-	intervalRow->setSpacing(6);
-	m_intervalCombo = new QComboBox(this);
-	for (int i = 0; i <= static_cast<int>(SaveInterval::OnStop); i++)
-		m_intervalCombo->addItem(intervalLabel(static_cast<SaveInterval>(i)));
-	connect(m_intervalCombo, &QComboBox::currentIndexChanged, this, &TimerDock::onConfigChanged);
-	intervalRow->addWidget(m_intervalCombo, 1);
-	root->addLayout(intervalRow);
-
-	m_overwriteBox = new QCheckBox(this);
-	m_millisecondsBox = new QCheckBox(this);
-	m_autoStartBox = new QCheckBox(this);
-	m_autoStopBox = new QCheckBox(this);
-	m_resetOnStartBox = new QCheckBox(this);
-
-	for (QCheckBox *box : {m_overwriteBox, m_millisecondsBox, m_autoStartBox, m_autoStopBox, m_resetOnStartBox}) {
-		connect(box, &QCheckBox::toggled, this, &TimerDock::onConfigChanged);
-		root->addWidget(box);
-	}
-
-	m_statusLabel = new QLabel(this);
-	m_statusLabel->setWordWrap(true);
-	m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	root->addWidget(m_statusLabel);
+	m_errorLabel = new QLabel(this);
+	m_errorLabel->setWordWrap(true);
+	m_errorLabel->setStyleSheet(QStringLiteral("color: #e0a030;"));
+	m_errorLabel->hide();
+	root->addWidget(m_errorLabel);
 
 	root->addStretch(1);
 }
@@ -156,59 +192,13 @@ void TimerDock::applyConfig()
 {
 	m_updatingUi = true;
 
+	m_hoursBox->setValue(m_config.hours);
+	m_minutesBox->setValue(m_config.minutes);
+	m_secondsBox->setValue(m_config.seconds);
+	m_formatCombo->setCurrentIndex((int)m_config.format);
 	m_pathEdit->setText(m_config.filePath);
-	m_pathEdit->setToolTip(m_config.filePath);
-	m_intervalCombo->setCurrentIndex(static_cast<int>(m_config.interval));
-	m_overwriteBox->setChecked(m_config.overwrite);
-	m_millisecondsBox->setChecked(m_config.showMilliseconds);
-	m_autoStartBox->setChecked(m_config.autoStartWithOutput);
-	m_autoStopBox->setChecked(m_config.autoStopWithOutput);
-	m_resetOnStartBox->setChecked(m_config.resetOnStart);
-
-	/* Labels have to be refreshed explicitly: OBS translates module strings
-	 * through obs_module_text() and the language may change at runtime. */
-	m_startPauseButton->setToolTip(localised("Timer.Button.StartPause.Hint"));
-	m_resetButton->setText(localised("Timer.Button.Reset"));
-	m_saveButton->setText(localised("Timer.Button.Save"));
-	m_browseButton->setToolTip(localised("Timer.Button.Browse"));
-	m_pathEdit->setToolTip(m_config.filePath.isEmpty() ? localised("Timer.Label.File") : m_config.filePath);
-	m_intervalCombo->setToolTip(localised("Timer.Label.Interval"));
-	m_overwriteBox->setText(localised("Timer.Check.Overwrite"));
-	m_millisecondsBox->setText(localised("Timer.Check.Milliseconds"));
-	m_autoStartBox->setText(localised("Timer.Check.AutoStart"));
-	m_autoStopBox->setText(localised("Timer.Check.AutoStop"));
-	m_resetOnStartBox->setText(localised("Timer.Check.ResetOnStart"));
 
 	m_updatingUi = false;
-
-	updateStartPauseButton();
-	updateDisplay();
-}
-
-Config TimerDock::collectConfig() const
-{
-	Config config;
-	config.filePath = m_pathEdit->text().trimmed();
-	config.interval = static_cast<SaveInterval>(m_intervalCombo->currentIndex());
-	config.overwrite = m_overwriteBox->isChecked();
-	config.showMilliseconds = m_millisecondsBox->isChecked();
-	config.autoStartWithOutput = m_autoStartBox->isChecked();
-	config.autoStopWithOutput = m_autoStopBox->isChecked();
-	config.resetOnStart = m_resetOnStartBox->isChecked();
-	return config;
-}
-
-void TimerDock::onConfigChanged()
-{
-	if (m_updatingUi)
-		return;
-
-	m_config = collectConfig();
-	m_pathEdit->setToolTip(m_config.filePath.isEmpty() ? localised("Timer.Label.File") : m_config.filePath);
-	updateDisplay();
-
-	if (m_configSaveTimer)
-		m_configSaveTimer->start();
 }
 
 void TimerDock::persistSettings()
@@ -216,161 +206,205 @@ void TimerDock::persistSettings()
 	saveConfig(m_config);
 }
 
-void TimerDock::onBrowseClicked()
+qint64 TimerDock::configuredMs() const
 {
-	const QString start = m_config.filePath.isEmpty() ? defaultFilePath() : m_config.filePath;
-	const QString chosen = QFileDialog::getSaveFileName(this, localised("Timer.Dialog.ChooseFile"), start,
-							    localised("Timer.Dialog.FileFilter"));
-	if (chosen.isEmpty())
+	const qint64 total = (qint64)m_config.hours * 3600 + (qint64)m_config.minutes * 60 + m_config.seconds;
+	return total * 1000;
+}
+
+qint64 TimerDock::remainingMs() const
+{
+	if (!m_running)
+		return m_remainingMs;
+
+	const auto now = std::chrono::steady_clock::now();
+	const qint64 left = std::chrono::duration_cast<std::chrono::milliseconds>(m_deadline - now).count();
+	return left > 0 ? left : 0;
+}
+
+void TimerDock::onDurationChanged()
+{
+	if (m_updatingUi)
 		return;
 
-	m_pathEdit->setText(chosen);
-	m_config = collectConfig();
+	m_config.hours = m_hoursBox->value();
+	m_config.minutes = m_minutesBox->value();
+	m_config.seconds = m_secondsBox->value();
+
+	persistSettings();
+
+	/* Changing the duration always brings the timer back to the new
+	 * starting value so the next Start uses it. */
+	m_running = false;
+	if (m_tickTimer)
+		m_tickTimer->stop();
+
+	m_remainingMs = configuredMs();
+	m_lastWrittenSeconds = -1;
+
+	updateDisplay();
+	updateStartPauseButton();
+}
+
+void TimerDock::onFormatChanged(int index)
+{
+	if (m_updatingUi)
+		return;
+
+	m_config.format = static_cast<DisplayFormat>(index);
+	persistSettings();
+
+	updateDisplay();
+
+	if (m_running)
+		writeFile();
+}
+
+void TimerDock::onFilePathEdited()
+{
+	const QString path = m_pathEdit->text().trimmed();
+	if (path == m_config.filePath)
+		return;
+
+	m_config.filePath = path;
 	persistSettings();
 }
 
 void TimerDock::startOrPause()
 {
-	if (m_running)
-		pauseTimer();
-	else
-		startTimer(false);
-}
-
-void TimerDock::startTimer(bool reset)
-{
-	if (reset) {
-		m_baseMs = 0;
-		m_lastWriteMs = -1;
-	}
-
 	if (m_running) {
+		m_remainingMs = remainingMs();
+		m_running = false;
+
+		if (m_tickTimer)
+			m_tickTimer->stop();
+
+		updateStartPauseButton();
 		updateDisplay();
 		return;
 	}
 
-	m_clock.restart();
+	qint64 startValue = m_remainingMs;
+	if (startValue <= 0)
+		startValue = configuredMs();
+
+	/* Nothing to count down: the duration is zero. */
+	if (startValue <= 0)
+		return;
+
+	m_remainingMs = startValue;
+	m_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(startValue);
 	m_running = true;
+	m_lastWrittenSeconds = -1;
+
 	updateStartPauseButton();
 	updateDisplay();
+	writeFile();
 
-	if (m_config.overwrite) {
-		QString error;
-		if (!writeCurrentValue(&error))
-			setStatus(error, true);
-	}
+	if (m_tickTimer)
+		m_tickTimer->start();
 }
 
-void TimerDock::pauseTimer()
+void TimerDock::reset()
 {
-	if (!m_running)
-		return;
-
-	m_baseMs += m_clock.elapsed();
 	m_running = false;
-	m_lastWriteMs = -1;
+	if (m_tickTimer)
+		m_tickTimer->stop();
+
+	m_remainingMs = configuredMs();
+	m_lastWrittenSeconds = -1;
 
 	updateStartPauseButton();
 	updateDisplay();
-
-	QString error;
-	const bool ok = m_config.overwrite ? writeCurrentValue(&error) : appendSessionLine(&error);
-	if (!ok)
-		setStatus(error, true);
-}
-
-void TimerDock::resetTimer()
-{
-	m_baseMs = 0;
-	m_lastWriteMs = -1;
-	if (m_running)
-		m_clock.restart();
-
-	updateDisplay();
-
-	if (m_config.overwrite && !m_config.filePath.trimmed().isEmpty()) {
-		QString error;
-		if (!writeCurrentValue(&error))
-			setStatus(error, true);
-	}
-}
-
-void TimerDock::saveNow()
-{
-	QString error;
-	const bool ok = m_config.overwrite ? writeCurrentValue(&error) : appendSessionLine(&error);
-	if (!ok)
-		setStatus(error, true);
-}
-
-void TimerDock::handleOutputStateChanged(bool active)
-{
-	if (m_outputActive == active)
-		return;
-
-	m_outputActive = active;
-
-	if (active) {
-		if (m_config.autoStartWithOutput)
-			startTimer(m_config.resetOnStart);
-		return;
-	}
-
-	if (m_config.autoStopWithOutput && m_running)
-		pauseTimer();
-}
-
-void TimerDock::shutdown()
-{
-	if (m_running)
-		pauseTimer();
-
-	persistSettings();
+	writeFile();
 }
 
 void TimerDock::onTick()
 {
-	updateDisplay();
-
 	if (!m_running)
 		return;
 
-	const int interval = intervalMilliseconds(m_config.interval);
-	if (interval <= 0)
+	const qint64 left = remainingMs();
+	if (left <= 0) {
+		m_remainingMs = 0;
+		m_running = false;
+
+		if (m_tickTimer)
+			m_tickTimer->stop();
+
+		updateStartPauseButton();
+		updateDisplay();
+		writeFile();
+		return;
+	}
+
+	const qint64 seconds = (left + 999) / 1000;
+	if (seconds == m_lastWrittenSeconds)
 		return;
 
-	const qint64 now = elapsedMilliseconds();
-	if (m_lastWriteMs >= 0 && (now - m_lastWriteMs) < interval)
-		return;
+	m_lastWrittenSeconds = seconds;
+	m_remainingMs = left;
 
-	QString error;
-	if (!writeCurrentValue(&error))
-		setStatus(error, true);
+	updateDisplay();
+	writeFile();
 }
 
-bool TimerDock::writeCurrentValue(QString *error)
+void TimerDock::updateDisplay()
 {
-	const QString path = targetFilePath();
+	m_timeLabel->setText(formatDuration(remainingMs()));
+}
+
+void TimerDock::updateStartPauseButton()
+{
+	m_startPauseButton->setText(
+		QString::fromUtf8(obs_module_text(m_running ? "Timer.Button.Pause" : "Timer.Button.Start")));
+	m_startPauseButton->setIcon(
+		style()->standardIcon(m_running ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
+}
+
+QString TimerDock::formatDuration(qint64 milliseconds) const
+{
+	qint64 total = (milliseconds + 999) / 1000;
+	if (total < 0)
+		total = 0;
+
+	const qint64 hours = total / 3600;
+	const qint64 minutes = (total / 60) % 60;
+	const qint64 seconds = total % 60;
+
+	switch (m_config.format) {
+	case DisplayFormat::HoursMinutesSeconds:
+		return QString::asprintf("%02lld:%02lld:%02lld", (long long)hours, (long long)minutes,
+					 (long long)seconds);
+	case DisplayFormat::MinutesSeconds:
+		return QString::asprintf("%02lld:%02lld", (long long)(total / 60), (long long)seconds);
+	case DisplayFormat::SecondsOnly:
+		return QString::asprintf("%lld", (long long)total);
+	}
+
+	return QStringLiteral("00:00:00");
+}
+
+void TimerDock::writeFile()
+{
+	const QString path = m_config.filePath.trimmed();
 	if (path.isEmpty()) {
-		if (error)
-			*error = localised("Timer.Status.NoFile");
-		return false;
+		setError(QString::fromUtf8(obs_module_text("Timer.Error.NoFile")));
+		return;
 	}
 
 	const QDir folder = QFileInfo(path).absoluteDir();
 	if (!folder.exists() && !folder.mkpath(QStringLiteral("."))) {
-		if (error)
-			*error = localised("Timer.Status.NoDirectory").arg(folder.absolutePath());
-		return false;
+		setError(QString::fromUtf8(obs_module_text("Timer.Error.NoDirectory")).arg(folder.absolutePath()));
+		return;
 	}
 
-	const QString text = formatDuration(elapsedMilliseconds(), m_config.showMilliseconds);
+	const QString text = formatDuration(remainingMs());
 
 	QFile file(path);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		if (error)
-			*error = localised("Timer.Status.WriteError").arg(path, file.errorString());
-		return false;
+		setError(QString::fromUtf8(obs_module_text("Timer.Error.Write")).arg(path, file.errorString()));
+		return;
 	}
 
 	const QByteArray payload = text.toUtf8();
@@ -378,108 +412,23 @@ bool TimerDock::writeCurrentValue(QString *error)
 	file.close();
 
 	if (!written) {
-		if (error)
-			*error = localised("Timer.Status.WriteError").arg(path, file.errorString());
-		return false;
-	}
-
-	m_lastWriteMs = elapsedMilliseconds();
-	setStatus(localised("Timer.Status.Saved").arg(text, path), false);
-	return true;
-}
-
-bool TimerDock::appendSessionLine(QString *error)
-{
-	const QString path = targetFilePath();
-	if (path.isEmpty()) {
-		if (error)
-			*error = localised("Timer.Status.NoFile");
-		return false;
-	}
-
-	const QDir folder = QFileInfo(path).absoluteDir();
-	if (!folder.exists() && !folder.mkpath(QStringLiteral("."))) {
-		if (error)
-			*error = localised("Timer.Status.NoDirectory").arg(folder.absolutePath());
-		return false;
-	}
-
-	const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-	const QString line = QStringLiteral("%1\t%2\n")
-				     .arg(stamp, formatDuration(elapsedMilliseconds(), m_config.showMilliseconds));
-
-	QFile file(path);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-		if (error)
-			*error = localised("Timer.Status.WriteError").arg(path, file.errorString());
-		return false;
-	}
-
-	const QByteArray payload = line.toUtf8();
-	const bool written = file.write(payload) == payload.size();
-	file.close();
-
-	if (!written) {
-		if (error)
-			*error = localised("Timer.Status.WriteError").arg(path, file.errorString());
-		return false;
-	}
-
-	setStatus(localised("Timer.Status.Appended").arg(path), false);
-	return true;
-}
-
-void TimerDock::setStatus(const QString &text, bool warning)
-{
-	if (m_statusLabel->text() == text)
+		setError(QString::fromUtf8(obs_module_text("Timer.Error.Write")).arg(path, file.errorString()));
 		return;
+	}
 
-	m_statusLabel->setText(text);
-	m_statusLabel->setToolTip(text);
-	m_statusLabel->setStyleSheet(warning ? QStringLiteral("color: #e0a030;") : QString());
+	setError(QString());
 }
 
-void TimerDock::updateDisplay()
+void TimerDock::setError(const QString &text)
 {
-	m_timeLabel->setText(formatDuration(elapsedMilliseconds(), m_config.showMilliseconds));
-}
+	if (text.isEmpty()) {
+		m_errorLabel->clear();
+		m_errorLabel->hide();
+		return;
+	}
 
-void TimerDock::updateStartPauseButton()
-{
-	const bool running = m_running;
-	m_startPauseButton->setText(running ? localised("Timer.Button.Pause") : localised("Timer.Button.Start"));
-	m_startPauseButton->setIcon(style()->standardIcon(running ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
-}
-
-qint64 TimerDock::elapsedMilliseconds() const
-{
-	return m_baseMs + (m_running ? m_clock.elapsed() : 0);
-}
-
-QString TimerDock::formatDuration(qint64 milliseconds, bool withMilliseconds)
-{
-	const qint64 total = milliseconds > 0 ? milliseconds : 0;
-	const qint64 hours = total / 3600000;
-	const qint64 minutes = (total / 60000) % 60;
-	const qint64 seconds = (total / 1000) % 60;
-
-	QString text = QString::asprintf("%02lld:%02lld:%02lld", static_cast<long long>(hours),
-					 static_cast<long long>(minutes), static_cast<long long>(seconds));
-
-	if (withMilliseconds)
-		text += QString::asprintf(".%03lld", static_cast<long long>(total % 1000));
-
-	return text;
-}
-
-QString TimerDock::targetFilePath() const
-{
-	return m_config.filePath.trimmed();
-}
-
-QString TimerDock::localised(const char *key) const
-{
-	return QString::fromUtf8(obs_module_text(key));
+	m_errorLabel->setText(text);
+	m_errorLabel->show();
 }
 
 } // namespace obstimer

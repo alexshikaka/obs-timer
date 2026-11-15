@@ -1,5 +1,5 @@
 /*
-obs-timer - a simple dockable timer for OBS Studio
+obs-timer - countdown timer for OBS Studio
 Copyright (C) 2026 alexshikaka
 
 This program is free software; you can redistribute it and/or modify
@@ -22,34 +22,24 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 namespace obstimer {
 
-enum class SaveInterval : int {
-	Ms100 = 0,
-	Ms250,
-	Ms500,
-	Sec1,
-	Sec5,
-	Sec10,
-	OnStop,
+/* Which units the timer shows (and writes to the file).
+ * The separator is always a colon. */
+enum class DisplayFormat : int {
+	HoursMinutesSeconds = 0,
+	MinutesSeconds,
+	SecondsOnly,
 };
 
 struct Config {
 	QString filePath;
-	SaveInterval interval = SaveInterval::Sec1;
-	bool overwrite = true;
-	bool showMilliseconds = false;
-	bool autoStartWithOutput = true;
-	bool autoStopWithOutput = true;
-	bool resetOnStart = true;
+	int hours = 0;
+	int minutes = 5;
+	int seconds = 0;
+	DisplayFormat format = DisplayFormat::HoursMinutesSeconds;
 };
 
-/* Suggested default location of the output file (Documents/obs-timer.txt). */
+/* Default target file: Documents/obs-timer.txt */
 QString defaultFilePath();
-
-/* Localised label for the interval, e.g. "every second". */
-QString intervalLabel(SaveInterval interval);
-
-/* Milliseconds between writes, 0 means "only when the timer is stopped". */
-int intervalMilliseconds(SaveInterval interval);
 
 Config loadConfig();
 void saveConfig(const Config &config);

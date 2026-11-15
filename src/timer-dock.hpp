@@ -1,5 +1,5 @@
 /*
-obs-timer - a simple dockable timer for OBS Studio
+obs-timer - countdown timer for OBS Studio
 Copyright (C) 2026 alexshikaka
 
 This program is free software; you can redistribute it and/or modify
@@ -20,21 +20,22 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "timer-config.hpp"
 
-#include <QElapsedTimer>
 #include <QWidget>
 
-class QCheckBox;
+#include <chrono>
+
 class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QSpinBox;
 class QTimer;
 
 namespace obstimer {
 
-/* Dock content widget: a stopwatch that continuously writes its value
- * into a plain text file.  OBS wraps this widget into its own QDockWidget
- * via obs_frontend_add_dock_by_id(). */
+/* Dock content widget: a countdown timer that rewrites a plain text file
+ * once per second with the remaining time.  OBS wraps this widget into its
+ * own QDockWidget via obs_frontend_add_dock_by_id(). */
 class TimerDock : public QWidget {
 	Q_OBJECT
 
@@ -44,64 +45,50 @@ public:
 
 	static TimerDock *instance() { return s_instance; }
 
-	/* Persist the current settings into the plugin config directory. */
-	void persistSettings();
-
 public slots:
+	/* Start button: starts the countdown, turns into Pause while running. */
 	void startOrPause();
-	void resetTimer();
-	void saveNow();
-	void handleOutputStateChanged(bool active);
-	void shutdown();
+	/* Stop button: stops the countdown and restores the chosen duration. */
+	void reset();
 
 private slots:
 	void onTick();
-	void onConfigChanged();
-	void onBrowseClicked();
+	void onDurationChanged();
+	void onFormatChanged(int index);
+	void onFilePathEdited();
 
 private:
 	void buildUi();
 	void applyConfig();
-	Config collectConfig() const;
+	void persistSettings();
 	void updateDisplay();
 	void updateStartPauseButton();
-	void startTimer(bool reset);
-	void pauseTimer();
-	bool writeCurrentValue(QString *error);
-	bool appendSessionLine(QString *error);
-	void setStatus(const QString &text, bool warning);
-	QString localised(const char *key) const;
+	void writeFile();
+	void setError(const QString &text);
 
-	qint64 elapsedMilliseconds() const;
-	static QString formatDuration(qint64 milliseconds, bool withMilliseconds);
-	QString targetFilePath() const;
+	qint64 configuredMs() const;
+	qint64 remainingMs() const;
+	QString formatDuration(qint64 milliseconds) const;
 
 	static TimerDock *s_instance;
 
 	bool m_running = false;
-	bool m_outputActive = false;
 	bool m_updatingUi = false;
-	qint64 m_baseMs = 0;
-	qint64 m_lastWriteMs = -1;
-	QElapsedTimer m_clock;
+	qint64 m_remainingMs = 0;
+	qint64 m_lastWrittenSeconds = -1;
+	std::chrono::steady_clock::time_point m_deadline;
 	Config m_config;
 
 	QTimer *m_tickTimer = nullptr;
-	QTimer *m_configSaveTimer = nullptr;
-
+	QSpinBox *m_hoursBox = nullptr;
+	QSpinBox *m_minutesBox = nullptr;
+	QSpinBox *m_secondsBox = nullptr;
+	QComboBox *m_formatCombo = nullptr;
 	QLabel *m_timeLabel = nullptr;
 	QPushButton *m_startPauseButton = nullptr;
 	QPushButton *m_resetButton = nullptr;
-	QPushButton *m_saveButton = nullptr;
 	QLineEdit *m_pathEdit = nullptr;
-	QPushButton *m_browseButton = nullptr;
-	QComboBox *m_intervalCombo = nullptr;
-	QCheckBox *m_overwriteBox = nullptr;
-	QCheckBox *m_millisecondsBox = nullptr;
-	QCheckBox *m_autoStartBox = nullptr;
-	QCheckBox *m_autoStopBox = nullptr;
-	QCheckBox *m_resetOnStartBox = nullptr;
-	QLabel *m_statusLabel = nullptr;
+	QLabel *m_errorLabel = nullptr;
 };
 
 } // namespace obstimer
