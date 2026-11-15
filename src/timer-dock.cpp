@@ -23,6 +23,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -39,9 +40,6 @@ namespace obstimer {
 TimerDock *TimerDock::s_instance = nullptr;
 
 namespace {
-/* How often the countdown is polled.  The file itself is written once per
- * whole second, the finer poll is only there to keep the switch accurate. */
-constexpr int kTickIntervalMs = 100;
 constexpr int kMaxHours = 99;
 constexpr int kMaxMinutes = 59;
 constexpr int kMaxSeconds = 59;
@@ -55,10 +53,6 @@ TimerDock::TimerDock(QWidget *parent) : QWidget(parent)
 	applyConfig();
 
 	m_remainingMs = configuredMs();
-
-	m_tickTimer = new QTimer(this);
-	m_tickTimer->setInterval(kTickIntervalMs);
-	connect(m_tickTimer, &QTimer::timeout, this, &TimerDock::onTick);
 
 	updateDisplay();
 	updateStartPauseButton();
@@ -80,7 +74,35 @@ void TimerDock::buildUi()
 	root->setContentsMargins(8, 8, 8, 8);
 	root->setSpacing(6);
 
-	/* --- hours / minutes / seconds ------------------------------------- */
+	/* --- 1. the timer itself ------------------------------------------- */
+	m_timeLabel = new QLabel(this);
+	m_timeLabel->setAlignment(Qt::AlignCenter);
+	m_timeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+	QFont monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	monoFont.setPointSize(24);
+	monoFont.setBold(true);
+	m_timeLabel->setFont(monoFont);
+	m_timeLabel->setMinimumHeight(56);
+	root->addWidget(m_timeLabel);
+
+	/* --- 2. start / stop ------------------------------------------------ */
+	auto *buttonsRow = new QHBoxLayout();
+	buttonsRow->setSpacing(6);
+
+	m_startPauseButton = new QPushButton(this);
+	m_startPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+	connect(m_startPauseButton, &QPushButton::clicked, this, &TimerDock::startOrPause);
+	buttonsRow->addWidget(m_startPauseButton, 1);
+
+	m_resetButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Button.Stop")), this);
+	m_resetButton->setIcon(style()->standardIcon(QStyle::SP_MediaStop));
+	connect(m_resetButton, &QPushButton::clicked, this, &TimerDock::reset);
+	buttonsRow->addWidget(m_resetButton, 1);
+
+	root->addLayout(buttonsRow);
+
+	/* --- 3. hours / minutes / seconds ----------------------------------- */
 	auto *fieldsRow = new QHBoxLayout();
 	fieldsRow->setSpacing(6);
 
@@ -118,66 +140,50 @@ void TimerDock::buildUi()
 
 	root->addLayout(fieldsRow);
 
-	/* --- quick minute buttons ------------------------------------------ */
+	/* --- 4. quick minute buttons ---------------------------------------- */
 	auto *presetsRow = new QHBoxLayout();
-	presetsRow->setSpacing(3);
+	presetsRow->setSpacing(4);
 
 	for (int minutes = 1; minutes <= 9; minutes++) {
 		auto *button = new QPushButton(QString::number(minutes), this);
-		button->setFixedWidth(26);
+		button->setMinimumWidth(34);
+		button->setMinimumHeight(26);
 		connect(button, &QPushButton::clicked, this, [this, minutes]() { m_minutesBox->setValue(minutes); });
 		presetsRow->addWidget(button);
 	}
 
 	auto *tenButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes")), this);
 	tenButton->setToolTip(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes.Hint")));
+	tenButton->setMinimumHeight(26);
 	connect(tenButton, &QPushButton::clicked, this, [this]() { m_minutesBox->setValue(10); });
 	presetsRow->addWidget(tenButton, 1);
 
 	root->addLayout(presetsRow);
 
-	/* --- display format ------------------------------------------------ */
+	/* --- 5. display format ---------------------------------------------- */
 	m_formatCombo = new QComboBox(this);
 	m_formatCombo->addItem(QString::fromUtf8(obs_module_text("Timer.Format.HoursMinutesSeconds")));
 	m_formatCombo->addItem(QString::fromUtf8(obs_module_text("Timer.Format.MinutesSeconds")));
-	m_formatCombo->addItem(QString::fromUtf8(obs_module_text("Timer.Format.SecondsOnly")));
 	m_formatCombo->setToolTip(QString::fromUtf8(obs_module_text("Timer.Format.Hint")));
 	connect(m_formatCombo, &QComboBox::currentIndexChanged, this, &TimerDock::onFormatChanged);
 	root->addWidget(m_formatCombo);
 
-	/* --- the timer itself ----------------------------------------------- */
-	m_timeLabel = new QLabel(QStringLiteral("00:00:00"), this);
-	m_timeLabel->setAlignment(Qt::AlignCenter);
-	m_timeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	/* --- 6. output file -------------------------------------------------- */
+	auto *pathRow = new QHBoxLayout();
+	pathRow->setSpacing(6);
 
-	QFont monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	monoFont.setPointSize(24);
-	monoFont.setBold(true);
-	m_timeLabel->setFont(monoFont);
-	m_timeLabel->setMinimumHeight(56);
-	root->addWidget(m_timeLabel);
-
-	/* --- start / stop --------------------------------------------------- */
-	auto *buttonsRow = new QHBoxLayout();
-	buttonsRow->setSpacing(6);
-
-	m_startPauseButton = new QPushButton(this);
-	m_startPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-	connect(m_startPauseButton, &QPushButton::clicked, this, &TimerDock::startOrPause);
-	buttonsRow->addWidget(m_startPauseButton, 1);
-
-	m_resetButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Button.Stop")), this);
-	m_resetButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-	connect(m_resetButton, &QPushButton::clicked, this, &TimerDock::reset);
-	buttonsRow->addWidget(m_resetButton, 1);
-
-	root->addLayout(buttonsRow);
-
-	/* --- output file ---------------------------------------------------- */
 	m_pathEdit = new QLineEdit(this);
 	m_pathEdit->setPlaceholderText(QString::fromUtf8(obs_module_text("Timer.Label.File")));
 	connect(m_pathEdit, &QLineEdit::editingFinished, this, &TimerDock::onFilePathEdited);
-	root->addWidget(m_pathEdit);
+	pathRow->addWidget(m_pathEdit, 1);
+
+	m_browseButton = new QPushButton(this);
+	m_browseButton->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
+	m_browseButton->setToolTip(QString::fromUtf8(obs_module_text("Timer.Button.Browse")));
+	connect(m_browseButton, &QPushButton::clicked, this, &TimerDock::onBrowseClicked);
+	pathRow->addWidget(m_browseButton);
+
+	root->addLayout(pathRow);
 
 	m_errorLabel = new QLabel(this);
 	m_errorLabel->setWordWrap(true);
@@ -212,13 +218,21 @@ qint64 TimerDock::configuredMs() const
 	return total * 1000;
 }
 
-qint64 TimerDock::remainingMs() const
+qint64 TimerDock::elapsedMs() const
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+								    m_phaseStart)
+		.count();
+}
+
+/* Remaining time snapped to whole seconds: the value the timer shows and
+ * the value that goes into the file, so both change at the same moment. */
+qint64 TimerDock::shownMs() const
 {
 	if (!m_running)
 		return m_remainingMs;
 
-	const auto now = std::chrono::steady_clock::now();
-	const qint64 left = std::chrono::duration_cast<std::chrono::milliseconds>(m_deadline - now).count();
+	const qint64 left = m_phaseMs - (elapsedMs() / 1000) * 1000;
 	return left > 0 ? left : 0;
 }
 
@@ -233,14 +247,9 @@ void TimerDock::onDurationChanged()
 
 	persistSettings();
 
-	/* Changing the duration always brings the timer back to the new
-	 * starting value so the next Start uses it. */
+	/* Changing the duration brings the timer back to the new start value. */
 	m_running = false;
-	if (m_tickTimer)
-		m_tickTimer->stop();
-
 	m_remainingMs = configuredMs();
-	m_lastWrittenSeconds = -1;
 
 	updateDisplay();
 	updateStartPauseButton();
@@ -270,14 +279,29 @@ void TimerDock::onFilePathEdited()
 	persistSettings();
 }
 
+void TimerDock::onBrowseClicked()
+{
+	const QString current = m_config.filePath.trimmed().isEmpty() ? defaultFilePath() : m_config.filePath;
+
+	const QString chosen = QFileDialog::getSaveFileName(this, QString::fromUtf8(obs_module_text("Timer.Dialog.SaveFile")),
+							   current,
+							   QString::fromUtf8(obs_module_text("Timer.Dialog.FileFilter")));
+	if (chosen.isEmpty())
+		return;
+
+	m_pathEdit->setText(chosen);
+	m_config.filePath = chosen;
+	persistSettings();
+
+	if (m_running)
+		writeFile();
+}
+
 void TimerDock::startOrPause()
 {
 	if (m_running) {
-		m_remainingMs = remainingMs();
+		m_remainingMs = shownMs();
 		m_running = false;
-
-		if (m_tickTimer)
-			m_tickTimer->stop();
 
 		updateStartPauseButton();
 		updateDisplay();
@@ -288,35 +312,55 @@ void TimerDock::startOrPause()
 	if (startValue <= 0)
 		startValue = configuredMs();
 
-	/* Nothing to count down: the duration is zero. */
+	/* Nothing to count down. */
 	if (startValue <= 0)
 		return;
 
 	m_remainingMs = startValue;
-	m_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(startValue);
+	m_phaseMs = startValue;
+	m_phaseStart = std::chrono::steady_clock::now();
 	m_running = true;
-	m_lastWrittenSeconds = -1;
 
 	updateStartPauseButton();
 	updateDisplay();
 	writeFile();
 
-	if (m_tickTimer)
-		m_tickTimer->start();
+	scheduleNextTick();
 }
 
 void TimerDock::reset()
 {
 	m_running = false;
-	if (m_tickTimer)
-		m_tickTimer->stop();
-
 	m_remainingMs = configuredMs();
-	m_lastWrittenSeconds = -1;
 
 	updateStartPauseButton();
 	updateDisplay();
 	writeFile();
+}
+
+void TimerDock::finish()
+{
+	m_running = false;
+	m_remainingMs = 0;
+
+	updateStartPauseButton();
+	updateDisplay();
+	writeFile();
+}
+
+/* Wake up exactly on the next whole-second boundary of the countdown. */
+void TimerDock::scheduleNextTick()
+{
+	if (!m_running)
+		return;
+
+	const qint64 elapsed = elapsedMs();
+	const qint64 next = (elapsed / 1000 + 1) * 1000;
+	qint64 delay = next - elapsed;
+	if (delay < 1)
+		delay = 1;
+
+	QTimer::singleShot((int)delay, Qt::PreciseTimer, this, &TimerDock::onTick);
 }
 
 void TimerDock::onTick()
@@ -324,34 +368,20 @@ void TimerDock::onTick()
 	if (!m_running)
 		return;
 
-	const qint64 left = remainingMs();
-	if (left <= 0) {
-		m_remainingMs = 0;
-		m_running = false;
-
-		if (m_tickTimer)
-			m_tickTimer->stop();
-
-		updateStartPauseButton();
-		updateDisplay();
-		writeFile();
+	if (shownMs() <= 0) {
+		finish();
 		return;
 	}
 
-	const qint64 seconds = (left + 999) / 1000;
-	if (seconds == m_lastWrittenSeconds)
-		return;
-
-	m_lastWrittenSeconds = seconds;
-	m_remainingMs = left;
-
 	updateDisplay();
 	writeFile();
+
+	scheduleNextTick();
 }
 
 void TimerDock::updateDisplay()
 {
-	m_timeLabel->setText(formatDuration(remainingMs()));
+	m_timeLabel->setText(formatDuration(shownMs()));
 }
 
 void TimerDock::updateStartPauseButton()
@@ -364,7 +394,7 @@ void TimerDock::updateStartPauseButton()
 
 QString TimerDock::formatDuration(qint64 milliseconds) const
 {
-	qint64 total = (milliseconds + 999) / 1000;
+	qint64 total = milliseconds / 1000;
 	if (total < 0)
 		total = 0;
 
@@ -372,17 +402,10 @@ QString TimerDock::formatDuration(qint64 milliseconds) const
 	const qint64 minutes = (total / 60) % 60;
 	const qint64 seconds = total % 60;
 
-	switch (m_config.format) {
-	case DisplayFormat::HoursMinutesSeconds:
-		return QString::asprintf("%02lld:%02lld:%02lld", (long long)hours, (long long)minutes,
-					 (long long)seconds);
-	case DisplayFormat::MinutesSeconds:
+	if (m_config.format == DisplayFormat::MinutesSeconds)
 		return QString::asprintf("%02lld:%02lld", (long long)(total / 60), (long long)seconds);
-	case DisplayFormat::SecondsOnly:
-		return QString::asprintf("%lld", (long long)total);
-	}
 
-	return QStringLiteral("00:00:00");
+	return QString::asprintf("%02lld:%02lld:%02lld", (long long)hours, (long long)minutes, (long long)seconds);
 }
 
 void TimerDock::writeFile()
@@ -399,7 +422,7 @@ void TimerDock::writeFile()
 		return;
 	}
 
-	const QString text = formatDuration(remainingMs());
+	const QString text = formatDuration(shownMs());
 
 	QFile file(path);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {

@@ -29,13 +29,12 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
-class QTimer;
 
 namespace obstimer {
 
 /* Dock content widget: a countdown timer that rewrites a plain text file
- * once per second with the remaining time.  OBS wraps this widget into its
- * own QDockWidget via obs_frontend_add_dock_by_id(). */
+ * in lock-step with the countdown (once per whole second).  OBS wraps this
+ * widget into its own QDockWidget via obs_frontend_add_dock_by_id(). */
 class TimerDock : public QWidget {
 	Q_OBJECT
 
@@ -56,6 +55,7 @@ private slots:
 	void onDurationChanged();
 	void onFormatChanged(int index);
 	void onFilePathEdited();
+	void onBrowseClicked();
 
 private:
 	void buildUi();
@@ -64,10 +64,13 @@ private:
 	void updateDisplay();
 	void updateStartPauseButton();
 	void writeFile();
+	void finish();
+	void scheduleNextTick();
 	void setError(const QString &text);
 
 	qint64 configuredMs() const;
-	qint64 remainingMs() const;
+	qint64 elapsedMs() const;
+	qint64 shownMs() const;
 	QString formatDuration(qint64 milliseconds) const;
 
 	static TimerDock *s_instance;
@@ -75,11 +78,10 @@ private:
 	bool m_running = false;
 	bool m_updatingUi = false;
 	qint64 m_remainingMs = 0;
-	qint64 m_lastWrittenSeconds = -1;
-	std::chrono::steady_clock::time_point m_deadline;
+	qint64 m_phaseMs = 0;
+	std::chrono::steady_clock::time_point m_phaseStart;
 	Config m_config;
 
-	QTimer *m_tickTimer = nullptr;
 	QSpinBox *m_hoursBox = nullptr;
 	QSpinBox *m_minutesBox = nullptr;
 	QSpinBox *m_secondsBox = nullptr;
@@ -88,6 +90,7 @@ private:
 	QPushButton *m_startPauseButton = nullptr;
 	QPushButton *m_resetButton = nullptr;
 	QLineEdit *m_pathEdit = nullptr;
+	QPushButton *m_browseButton = nullptr;
 	QLabel *m_errorLabel = nullptr;
 };
 

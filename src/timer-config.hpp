@@ -27,7 +27,6 @@ namespace obstimer {
 enum class DisplayFormat : int {
 	HoursMinutesSeconds = 0,
 	MinutesSeconds,
-	SecondsOnly,
 };
 
 struct Config {
@@ -38,7 +37,7 @@ struct Config {
 	DisplayFormat format = DisplayFormat::HoursMinutesSeconds;
 };
 
-/* Default target file: Documents/obs-timer.txt */
+/* Default target file: inside the plugin folder that OBS loaded us from. */
 QString defaultFilePath();
 
 Config loadConfig();

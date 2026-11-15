@@ -23,11 +23,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <util/bmem.h>
 
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 namespace obstimer {
 
 namespace {
+
+const char *const kFileName = "obs-timer.txt";
 
 QString configFilePath()
 {
@@ -38,6 +41,27 @@ QString configFilePath()
 	QString result = QString::fromUtf8(path);
 	bfree(path);
 	return result;
+}
+
+/* Directory the plugin DLL was loaded from: <obs>/plugins/obs-timer.
+ * obs_find_module_file() hands out the module data directory,
+ * <obs>/plugins/obs-timer/data, so the folder itself is its parent. */
+QString pluginFolder()
+{
+	char *dataPath = obs_find_module_file(obs_current_module(), nullptr);
+	if (!dataPath)
+		return QString();
+
+	QString path = QString::fromUtf8(dataPath);
+	bfree(dataPath);
+
+	while (path.endsWith(QLatin1Char('/')) || path.endsWith(QLatin1Char('\\')))
+		path.chop(1);
+
+	if (path.isEmpty())
+		return QString();
+
+	return QFileInfo(path).absolutePath();
 }
 
 int clampInt(int value, int minimum, int maximum)
@@ -53,11 +77,15 @@ int clampInt(int value, int minimum, int maximum)
 
 QString defaultFilePath()
 {
-	QString folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-	if (folder.isEmpty())
-		folder = QDir::homePath();
+	const QString folder = pluginFolder();
+	if (!folder.isEmpty())
+		return QDir(folder).filePath(QString::fromLatin1(kFileName));
 
-	return QDir(folder).filePath(QStringLiteral("obs-timer.txt"));
+	QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+	if (documents.isEmpty())
+		documents = QDir::homePath();
+
+	return QDir(documents).filePath(QString::fromLatin1(kFileName));
 }
 
 Config loadConfig()
@@ -83,8 +111,10 @@ Config loadConfig()
 	config.seconds = clampInt((int)obs_data_get_int(data, "seconds"), 0, 59);
 
 	const int format = (int)obs_data_get_int(data, "format");
-	if (format >= (int)DisplayFormat::HoursMinutesSeconds && format <= (int)DisplayFormat::SecondsOnly)
-		config.format = static_cast<DisplayFormat>(format);
+	if (format == (int)DisplayFormat::MinutesSeconds)
+		config.format = DisplayFormat::MinutesSeconds;
+	else
+		config.format = DisplayFormat::HoursMinutesSeconds;
 
 	obs_data_release(data);
 	return config;

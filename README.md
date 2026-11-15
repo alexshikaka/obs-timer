@@ -1,47 +1,53 @@
 # obs-timer
 
 A **countdown timer dock** for [OBS Studio](https://obsproject.com) that rewrites a plain text
-file **every second** with the remaining time, so a *Text (GDI+)* source reading that file
-shows a real, live countdown on stream.
+file **in lock-step with the countdown** (once per whole second), so a *Text (GDI+)* source
+reading that file shows a real, live countdown on stream.
 
 Built and tested against **OBS Studio 33.0.1** on Windows x64.
 
 ---
 
-## How it works
+## The panel
+
+Top to bottom:
 
 ```
 ┌ Timer ──────────────────────┐
-│  [ 0 ]   [ 5 ]   [ 0 ]      │  hours / minutes / seconds
-│  hours   minutes  seconds   │
+│        00:05:00             │  1. timer window
 │                             │
-│ [1][2][3][4][5][6][7][8][9] │  quick buttons: set the minutes
-│ [          10min          ] │
+│   [ ▶ Start ]  [ ■ Stop ]   │  2. Start (turns into Pause) / Stop
 │                             │
-│ [ Hours:minutes:seconds ▾ ] │  what to show / write
+│   [ 0 ]   [ 5 ]   [ 0 ]     │  3. hours / minutes / seconds
+│   часы    минуты  секунды   │
+│  [1][2][3][4][5][6][7][8][9]│  4. quick buttons: set the minutes
+│  [        10min        ]    │
 │                             │
-│        00:05:00             │  the timer
+│ [ Часы:минуты:секунды ▾ ]   │  5. display format
 │                             │
-│   [ ▶ Start ]  [ ⟲ Stop ]   │
-│                             │
-│ C:\Users\...\obs-timer.txt  │  output file
+│ [ ...\obs-timer.txt ] [ 📂 ]│  6. file + folder/name picker
 └─────────────────────────────┘
 ```
 
-* Set **hours / minutes / seconds** (or hit `1`–`9` / `10min` to set the minutes).
-* Pick the **format**: `HH:MM:SS`, `MM:SS` or plain seconds. The separator is always `:`.
-* Press **Start** — the button turns into **Pause**, and the countdown begins.
-* **Stop** cancels the countdown and restores the chosen duration, so you can start again
-  without re-entering it.
-* While counting down, the file is rewritten once per second with the remaining time.
-  At zero the timer stops on `00:00:00`.
+* **Timer window** — the countdown itself.
+* **Start** starts the countdown and turns into **Pause**; **Stop** (square) stops it and
+  restores the chosen duration, so the next Start begins from the full time again.
+* **Hours / minutes / seconds** spin boxes, with quick buttons `1`–`9` and `10min` that set
+  the minutes.
+* **Format** — `Hours:minutes:seconds` or `Minutes:seconds`, the separator is always `:`.
+  The same format is used in the panel and in the file.
+* **File** — where the value goes, plus a folder/name picker button. The default is
+  `obs-timer.txt` **inside the plugin folder**:
+  `C:\ProgramData\obs-studio\plugins\obs-timer\obs-timer.txt`.
+
+The file is rewritten exactly when the displayed second changes, so the overlay never lags
+behind the panel. At `00:00:00` the countdown stops.
 
 ## Using it on stream
 
-1. Set the duration in the dock and press **Start** once to make sure the file appears.
-2. In OBS add a **Text (GDI+)** source, enable **Read from file** and point it at the same
-   file shown in the dock (`Documents/obs-timer.txt` by default).
-3. Press **Start** when you want the countdown to run — the overlay follows the file.
+1. Set the duration and press **Start** once, so the file appears.
+2. In OBS add a **Text (GDI+)** source, enable **Read from file** and point it at the same file.
+3. Press **Start** when the countdown should run — the overlay follows the file.
 
 ## Installation
 
@@ -83,11 +89,16 @@ links against the exact 33.0.1 ABI. CI (`.github/workflows/build.yaml`) runs the
 
 ## Русский
 
-**obs-timer** — док-панель с обратным отсчётом. Задаёте часы/минуты/секунды (или жмёте `1`–`9`
-и `10min`), выбираете формат (`Ч:М:С`, `М:С`, секунды), жмёте **Старт**. Кнопка превращается в
-**Паузу**, а в текстовый файл каждую секунду пишется остаток — его можно подключить к источнику
-«Текст (GDI+)» с опцией «Читать из файла» и получить живой отсчёт в эфире. **Стоп** сбрасывает
-таймер к заданной длительности.
+**obs-timer** — док-панель с обратным отсчётом для OBS. Сверху вниз: окно таймера, кнопки
+**Старт** (превращается в **Паузу**) и **Стоп** (квадратик, сбрасывает к заданной
+длительности), поля часы/минуты/секунды с быстрыми кнопками `1`–`9` и `10мин`, выбор формата
+(`Часы:минуты:секунды` или `Минуты:секунды`, разделитель всегда `:`) и внизу строка файла с
+кнопкой выбора папки и имени.
+
+Файл перезаписывается ровно в момент смены секунды на панели — по умолчанию
+`C:\ProgramData\obs-studio\plugins\obs-timer\obs-timer.txt`, то есть в папке самого плагина.
+Его можно подключить к источнику «Текст (GDI+)» с опцией «Читать из файла» и получить живой
+отсчёт в эфире. На `00:00:00` таймер останавливается.
 
 Установка: распакуйте папку `obs-timer` из zip в `C:\ProgramData\obs-studio\plugins\` и
 перезапустите OBS. Панель — **Вид → Док-панели → Таймер**.
