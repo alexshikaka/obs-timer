@@ -155,21 +155,22 @@ void TimerDock::buildUi()
 	for (int minutes = 1; minutes <= 9; minutes++) {
 		auto *button = new QPushButton(QString::number(minutes), this);
 		button->setFont(presetFont);
-		button->setFixedSize(24, 22);
+		button->setMinimumSize(20, 22);
+		button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 		button->setStyleSheet(presetStyle);
 		connect(button, &QPushButton::clicked, this, [this, minutes]() { m_minutesBox->setValue(minutes); });
-		presetsRow->addWidget(button);
+		presetsRow->addWidget(button, 1);
 	}
 
 	auto *tenButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes")), this);
 	tenButton->setFont(presetFont);
-	tenButton->setFixedSize(40, 22);
+	tenButton->setMinimumSize(44, 22);
+	tenButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 	tenButton->setStyleSheet(presetStyle);
 	tenButton->setToolTip(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes.Hint")));
 	connect(tenButton, &QPushButton::clicked, this, [this]() { m_minutesBox->setValue(10); });
-	presetsRow->addWidget(tenButton);
+	presetsRow->addWidget(tenButton, 1);
 
-	presetsRow->addStretch(1);
 	root->addLayout(presetsRow);
 
 	/* --- 5. display format ---------------------------------------------- */
