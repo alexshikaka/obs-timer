@@ -164,7 +164,7 @@ void TimerDock::buildUi()
 
 	auto *tenButton = new QPushButton(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes")), this);
 	tenButton->setFont(presetFont);
-	tenButton->setMinimumSize(44, 22);
+	tenButton->setMinimumSize(20, 22);
 	tenButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 	tenButton->setStyleSheet(presetStyle);
 	tenButton->setToolTip(QString::fromUtf8(obs_module_text("Timer.Preset.TenMinutes.Hint")));
