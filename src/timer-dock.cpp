@@ -80,10 +80,11 @@ void TimerDock::buildUi()
 	m_timeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
 	QFont monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	monoFont.setPointSize(24);
+	monoFont.setPointSize(20);
 	monoFont.setBold(true);
 	m_timeLabel->setFont(monoFont);
-	m_timeLabel->setMinimumHeight(56);
+	m_timeLabel->setContentsMargins(0, 0, 0, 0);
+	m_timeLabel->setMinimumHeight(34);
 	root->addWidget(m_timeLabel);
 
 	/* --- 2. start / stop ------------------------------------------------ */
