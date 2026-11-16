@@ -30,11 +30,12 @@
     },
     "name": "obs-timer",
     "displayName": "Timer",
-    "version": "1.2.4",
+    "version": "1.3.0",
     "author": "alexshikaka",
     "website": "https://github.com/alexshikaka/obs-timer",
     "email": "alexshikaka@users.noreply.github.com"
 }
+
 
 
 

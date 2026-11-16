@@ -43,6 +43,9 @@ namespace {
 constexpr int kMaxHours = 99;
 constexpr int kMaxMinutes = 59;
 constexpr int kMaxSeconds = 59;
+/* Poll interval: the displayed value and the file are updated on every whole
+ * second, this only bounds how late that update can be. */
+constexpr int kTickIntervalMs = 100;
 } // namespace
 
 TimerDock::TimerDock(QWidget *parent) : QWidget(parent)
@@ -52,7 +55,16 @@ TimerDock::TimerDock(QWidget *parent) : QWidget(parent)
 	buildUi();
 	applyConfig();
 
+	m_tickTimer = new QTimer(this);
+	m_tickTimer->setTimerType(Qt::PreciseTimer);
+	m_tickTimer->setInterval(kTickIntervalMs);
+	connect(m_tickTimer, &QTimer::timeout, this, &TimerDock::onTick);
+
 	m_remainingMs = configuredMs();
+
+	/* The file ships with the plugin and must always exist: it starts out
+	 * empty until the countdown is started. */
+	clearFile();
 
 	updateDisplay();
 	updateStartPauseButton();
@@ -266,6 +278,7 @@ void TimerDock::onDurationChanged()
 
 	updateDisplay();
 	updateStartPauseButton();
+	clearFile();
 }
 
 void TimerDock::onFormatChanged(int index)
@@ -290,6 +303,9 @@ void TimerDock::onFilePathEdited()
 
 	m_config.filePath = path;
 	persistSettings();
+
+	if (!m_running)
+		clearFile();
 }
 
 void TimerDock::onBrowseClicked()
@@ -308,6 +324,8 @@ void TimerDock::onBrowseClicked()
 
 	if (m_running)
 		writeFile();
+	else
+		clearFile();
 }
 
 void TimerDock::startOrPause()
@@ -315,6 +333,9 @@ void TimerDock::startOrPause()
 	if (m_running) {
 		m_remainingMs = shownMs();
 		m_running = false;
+
+		if (m_tickTimer)
+			m_tickTimer->stop();
 
 		updateStartPauseButton();
 		updateDisplay();
@@ -333,47 +354,42 @@ void TimerDock::startOrPause()
 	m_phaseMs = startValue;
 	m_phaseStart = std::chrono::steady_clock::now();
 	m_running = true;
+	m_lastWrittenMs = startValue;
 
 	updateStartPauseButton();
 	updateDisplay();
 	writeFile();
 
-	scheduleNextTick();
+	if (m_tickTimer)
+		m_tickTimer->start();
 }
 
 void TimerDock::reset()
 {
 	m_running = false;
 	m_remainingMs = configuredMs();
+	m_lastWrittenMs = -1;
+
+	if (m_tickTimer)
+		m_tickTimer->stop();
 
 	updateStartPauseButton();
 	updateDisplay();
-	writeFile();
+	clearFile();
 }
 
 void TimerDock::finish()
 {
 	m_running = false;
 	m_remainingMs = 0;
+	m_lastWrittenMs = -1;
+
+	if (m_tickTimer)
+		m_tickTimer->stop();
 
 	updateStartPauseButton();
 	updateDisplay();
-	writeFile();
-}
-
-/* Wake up exactly on the next whole-second boundary of the countdown. */
-void TimerDock::scheduleNextTick()
-{
-	if (!m_running)
-		return;
-
-	const qint64 elapsed = elapsedMs();
-	const qint64 next = (elapsed / 1000 + 1) * 1000;
-	qint64 delay = next - elapsed;
-	if (delay < 1)
-		delay = 1;
-
-	QTimer::singleShot((int)delay, Qt::PreciseTimer, this, &TimerDock::onTick);
+	clearFile();
 }
 
 void TimerDock::onTick()
@@ -381,15 +397,20 @@ void TimerDock::onTick()
 	if (!m_running)
 		return;
 
-	if (shownMs() <= 0) {
+	const qint64 current = shownMs();
+
+	if (current <= 0) {
 		finish();
 		return;
 	}
 
+	/* The value is only rewritten when the displayed second changes. */
+	if (current == m_lastWrittenMs)
+		return;
+
+	m_lastWrittenMs = current;
 	updateDisplay();
 	writeFile();
-
-	scheduleNextTick();
 }
 
 void TimerDock::updateDisplay()
@@ -452,6 +473,30 @@ void TimerDock::writeFile()
 		return;
 	}
 
+	setError(QString());
+}
+
+/* Keeps the file on disk but empties it: that is the state when OBS starts
+ * and when a countdown has finished.  The file is never deleted. */
+void TimerDock::clearFile()
+{
+	const QString path = m_config.filePath.trimmed();
+	if (path.isEmpty())
+		return;
+
+	const QDir folder = QFileInfo(path).absoluteDir();
+	if (!folder.exists() && !folder.mkpath(QStringLiteral("."))) {
+		setError(QString::fromUtf8(obs_module_text("Timer.Error.NoDirectory")).arg(folder.absolutePath()));
+		return;
+	}
+
+	QFile file(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		setError(QString::fromUtf8(obs_module_text("Timer.Error.Write")).arg(path, file.errorString()));
+		return;
+	}
+
+	file.close();
 	setError(QString());
 }
 

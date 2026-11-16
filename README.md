@@ -40,8 +40,10 @@ Top to bottom:
   `obs-timer.txt` **inside the plugin folder**:
   `C:\ProgramData\obs-studio\plugins\obs-timer\obs-timer.txt`.
 
-The file is rewritten exactly when the displayed second changes, so the overlay never lags
-behind the panel. At `00:00:00` the countdown stops.
+The file ships with the plugin and is **never deleted**: it is empty when OBS starts and
+again after the countdown finishes, and it holds the remaining time while the countdown runs.
+It is rewritten exactly when the displayed second changes, so the overlay never lags behind
+the panel.
 
 ## Using it on stream
 
@@ -95,10 +97,10 @@ links against the exact 33.0.1 ABI. CI (`.github/workflows/build.yaml`) runs the
 (`Часы:минуты:секунды` или `Минуты:секунды`, разделитель всегда `:`) и внизу строка файла с
 кнопкой выбора папки и имени.
 
-Файл перезаписывается ровно в момент смены секунды на панели — по умолчанию
-`C:\ProgramData\obs-studio\plugins\obs-timer\obs-timer.txt`, то есть в папке самого плагина.
-Его можно подключить к источнику «Текст (GDI+)» с опцией «Читать из файла» и получить живой
-отсчёт в эфире. На `00:00:00` таймер останавливается.
+Файл ставится вместе с плагином и никогда не удаляется: при запуске OBS и после окончания
+отсчёта он пустой, а пока таймер идёт — содержит остаток. Перезапись происходит ровно в момент
+смены секунды на панели. Его можно подключить к источнику «Текст (GDI+)» с опцией «Читать из
+файла» и получить живой отсчёт в эфире.
 
 Установка: распакуйте папку `obs-timer` из zip в `C:\ProgramData\obs-studio\plugins\` и
 перезапустите OBS. Панель — **Вид → Док-панели → Таймер**.

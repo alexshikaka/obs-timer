@@ -52,6 +52,23 @@ function(set_target_properties_plugin target)
 
   target_install_resources(${target})
 
+  # The timer file ships with the plugin so it exists right after installation.
+  install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows/resources/obs-timer.txt"
+    DESTINATION "${target}"
+    RENAME "obs-timer.txt"
+  )
+
+  add_custom_command(
+    TARGET ${target}
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows/resources/obs-timer.txt"
+            "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>/${target}/obs-timer.txt"
+    COMMENT "Copy the empty timer file to rundir"
+    VERBATIM
+  )
+
   get_target_property(target_sources ${target} SOURCES)
   set(target_ui_files ${target_sources})
   list(FILTER target_ui_files INCLUDE REGEX ".+\\.(ui|qrc)")

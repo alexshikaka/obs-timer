@@ -29,6 +29,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QTimer;
 
 namespace obstimer {
 
@@ -64,8 +65,8 @@ private:
 	void updateDisplay();
 	void updateStartPauseButton();
 	void writeFile();
+	void clearFile();
 	void finish();
-	void scheduleNextTick();
 	void setError(const QString &text);
 
 	qint64 configuredMs() const;
@@ -79,8 +80,11 @@ private:
 	bool m_updatingUi = false;
 	qint64 m_remainingMs = 0;
 	qint64 m_phaseMs = 0;
+	qint64 m_lastWrittenMs = -1;
 	std::chrono::steady_clock::time_point m_phaseStart;
 	Config m_config;
+
+	QTimer *m_tickTimer = nullptr;
 
 	QSpinBox *m_hoursBox = nullptr;
 	QSpinBox *m_minutesBox = nullptr;
